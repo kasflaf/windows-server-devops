@@ -28,32 +28,55 @@ if (!(Test-Path $InstallPath)) {
     Write-Host "Directory already exists." -ForegroundColor Yellow
 }
 
-# Step 2: Download GitLab Runner binary
-Write-Host "Downloading GitLab Runner binary..." -ForegroundColor Yellow
+# Step 2: Download GitLab Runner binary (check if it already exists)
 $RunnerExePath = Join-Path $InstallPath "gitlab-runner.exe"
 
-try {
-    # Download the latest GitLab Runner for Windows
-    $DownloadUrl = "https://gitlab-runner-downloads.s3.amazonaws.com/latest/binaries/gitlab-runner-windows-amd64.exe"
-    Invoke-WebRequest -Uri $DownloadUrl -OutFile $RunnerExePath
-    Write-Host "GitLab Runner binary downloaded successfully." -ForegroundColor Green
-} catch {
-    Write-Error "Failed to download GitLab Runner binary: $($_.Exception.Message)"
-    exit 1
+if (Test-Path $RunnerExePath) {
+    Write-Host "GitLab Runner binary already exists at $RunnerExePath" -ForegroundColor Yellow
+    $overwrite = Read-Host "Do you want to re-download it? (y/N)"
+    if ($overwrite -eq 'y' -or $overwrite -eq 'Y') {
+        Write-Host "Re-downloading GitLab Runner binary..." -ForegroundColor Yellow
+        try {
+            $DownloadUrl = "https://gitlab-runner-downloads.s3.amazonaws.com/latest/binaries/gitlab-runner-windows-amd64.exe"
+            Invoke-WebRequest -Uri $DownloadUrl -OutFile $RunnerExePath -Force
+            Write-Host "GitLab Runner binary re-downloaded successfully." -ForegroundColor Green
+        } catch {
+            Write-Error "Failed to download GitLab Runner binary: $($_.Exception.Message)"
+            exit 1
+        }
+    } else {
+        Write-Host "Using existing GitLab Runner binary." -ForegroundColor Green
+    }
+} else {
+    Write-Host "Downloading GitLab Runner binary..." -ForegroundColor Yellow
+    try {
+        $DownloadUrl = "https://gitlab-runner-downloads.s3.amazonaws.com/latest/binaries/gitlab-runner-windows-amd64.exe"
+        Invoke-WebRequest -Uri $DownloadUrl -OutFile $RunnerExePath
+        Write-Host "GitLab Runner binary downloaded successfully." -ForegroundColor Green
+    } catch {
+        Write-Error "Failed to download GitLab Runner binary: $($_.Exception.Message)"
+        exit 1
+    }
 }
 
 # Step 3: Set proper permissions on the directory and executable
 Write-Host "Setting permissions on GitLab Runner directory..." -ForegroundColor Yellow
 try {
-    # Remove write permissions for regular users
+    # First, give full control to Administrators and SYSTEM
     $acl = Get-Acl $InstallPath
-    $accessRule = New-Object System.Security.AccessControl.FileSystemAccessRule("Users", "Write", "Deny")
-    $acl.SetAccessRule($accessRule)
-    Set-Acl -Path $InstallPath -AclObject $acl
     
-    # Set permissions on the executable
-    $acl = Get-Acl $RunnerExePath
-    $acl.SetAccessRule($accessRule)
+    # Remove inherited permissions
+    $acl.SetAccessRuleProtection($true, $false)
+    
+    # Add explicit permissions for SYSTEM and Administrators
+    $systemRule = New-Object System.Security.AccessControl.FileSystemAccessRule("SYSTEM", "FullControl", "ContainerInherit,ObjectInherit", "None", "Allow")
+    $adminRule = New-Object System.Security.AccessControl.FileSystemAccessRule("Administrators", "FullControl", "ContainerInherit,ObjectInherit", "None", "Allow")
+    
+    $acl.SetAccessRule($systemRule)
+    $acl.SetAccessRule($adminRule)
+    
+    # Apply permissions
+    Set-Acl -Path $InstallPath -AclObject $acl
     Set-Acl -Path $RunnerExePath -AclObject $acl
     
     Write-Host "Permissions set successfully." -ForegroundColor Green
@@ -77,8 +100,13 @@ if ($RunnerUrl -and $RegistrationToken) {
     )
     
     try {
-        & .\gitlab-runner.exe $registerArgs
-        Write-Host "Runner registered successfully." -ForegroundColor Green
+        $result = & .\gitlab-runner.exe $registerArgs 2>&1
+        if ($LASTEXITCODE -eq 0) {
+            Write-Host "Runner registered successfully." -ForegroundColor Green
+        } else {
+            Write-Error "Failed to register runner. Exit code: $LASTEXITCODE. Output: $result"
+            exit 1
+        }
     } catch {
         Write-Error "Failed to register runner: $($_.Exception.Message)"
         exit 1
@@ -98,26 +126,53 @@ try {
     if ($UseUserAccount -and $Username -and $Password) {
         # Install with user account
         Write-Host "Installing service with user account: $Username" -ForegroundColor Yellow
-        & .\gitlab-runner.exe install --user $Username --password $Password
+        $installResult = & .\gitlab-runner.exe install --user $Username --password $Password 2>&1
+        $installExitCode = $LASTEXITCODE
     } else {
         # Install with built-in system account (recommended)
         Write-Host "Installing service with built-in system account..." -ForegroundColor Yellow
-        & .\gitlab-runner.exe install
+        $installResult = & .\gitlab-runner.exe install 2>&1
+        $installExitCode = $LASTEXITCODE
     }
     
-    Write-Host "Service installed successfully." -ForegroundColor Green
+    if ($installExitCode -eq 0) {
+        Write-Host "Service installed successfully." -ForegroundColor Green
+    } else {
+        Write-Error "Failed to install service. Exit code: $installExitCode. Output: $installResult"
+        exit 1
+    }
     
     # Start the service
     Write-Host "Starting GitLab Runner service..." -ForegroundColor Yellow
-    & .\gitlab-runner.exe start
-    Write-Host "Service started successfully." -ForegroundColor Green
+    $startResult = & .\gitlab-runner.exe start 2>&1
+    $startExitCode = $LASTEXITCODE
+    
+    if ($startExitCode -eq 0) {
+        Write-Host "Service started successfully." -ForegroundColor Green
+    } else {
+        Write-Error "Failed to start service. Exit code: $startExitCode. Output: $startResult"
+        exit 1
+    }
     
 } catch {
     Write-Error "Failed to install or start service: $($_.Exception.Message)"
     exit 1
 }
 
-# Optional: Display configuration file location
+# Verify service is running
+Write-Host "Verifying service status..." -ForegroundColor Yellow
+try {
+    $service = Get-Service -Name "gitlab-runner" -ErrorAction Stop
+    if ($service.Status -eq "Running") {
+        Write-Host "GitLab Runner service is running successfully." -ForegroundColor Green
+    } else {
+        Write-Warning "GitLab Runner service is installed but not running. Status: $($service.Status)"
+    }
+} catch {
+    Write-Warning "Could not verify service status: $($_.Exception.Message)"
+}
+
+# Display final information
 $configPath = Join-Path $InstallPath "config.toml"
 Write-Host ""
 Write-Host "Installation completed successfully!" -ForegroundColor Green
