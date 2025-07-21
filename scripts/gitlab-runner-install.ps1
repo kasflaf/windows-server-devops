@@ -62,26 +62,46 @@ if (Test-Path $RunnerExePath) {
 # Step 3: Set proper permissions on the directory and executable
 Write-Host "Setting permissions on GitLab Runner directory..." -ForegroundColor Yellow
 try {
-    # First, give full control to Administrators and SYSTEM
+    # Get current ACL
     $acl = Get-Acl $InstallPath
     
-    # Remove inherited permissions
-    $acl.SetAccessRuleProtection($true, $false)
+    # Remove inherited permissions and keep existing explicit permissions
+    $acl.SetAccessRuleProtection($true, $true)
     
-    # Add explicit permissions for SYSTEM and Administrators
+    # Add explicit permissions for accounts that need access
     $systemRule = New-Object System.Security.AccessControl.FileSystemAccessRule("SYSTEM", "FullControl", "ContainerInherit,ObjectInherit", "None", "Allow")
     $adminRule = New-Object System.Security.AccessControl.FileSystemAccessRule("Administrators", "FullControl", "ContainerInherit,ObjectInherit", "None", "Allow")
+    $serviceRule = New-Object System.Security.AccessControl.FileSystemAccessRule("NT SERVICE\gitlab-runner", "FullControl", "ContainerInherit,ObjectInherit", "None", "Allow")
+    $localServiceRule = New-Object System.Security.AccessControl.FileSystemAccessRule("LOCAL SERVICE", "FullControl", "ContainerInherit,ObjectInherit", "None", "Allow")
+    $networkServiceRule = New-Object System.Security.AccessControl.FileSystemAccessRule("NETWORK SERVICE", "FullControl", "ContainerInherit,ObjectInherit", "None", "Allow")
     
+    # Remove any existing rules for these accounts first
     $acl.SetAccessRule($systemRule)
     $acl.SetAccessRule($adminRule)
+    $acl.SetAccessRule($serviceRule)
+    $acl.SetAccessRule($localServiceRule) 
+    $acl.SetAccessRule($networkServiceRule)
     
-    # Apply permissions
+    # Apply permissions to directory
     Set-Acl -Path $InstallPath -AclObject $acl
+    
+    # Apply same permissions to executable
     Set-Acl -Path $RunnerExePath -AclObject $acl
     
     Write-Host "Permissions set successfully." -ForegroundColor Green
 } catch {
     Write-Warning "Failed to set permissions: $($_.Exception.Message)"
+    Write-Host "Attempting alternative permission method..." -ForegroundColor Yellow
+    
+    # Alternative method using icacls
+    try {
+        & icacls $InstallPath /grant "SYSTEM:(OI)(CI)F" /grant "Administrators:(OI)(CI)F" /grant "NT SERVICE\gitlab-runner:(OI)(CI)F" /grant "LOCAL SERVICE:(OI)(CI)F" /grant "NETWORK SERVICE:(OI)(CI)F" /T
+        & icacls $RunnerExePath /grant "SYSTEM:F" /grant "Administrators:F" /grant "NT SERVICE\gitlab-runner:F" /grant "LOCAL SERVICE:F" /grant "NETWORK SERVICE:F"
+        Write-Host "Alternative permissions set successfully." -ForegroundColor Green
+    } catch {
+        Write-Error "Failed to set permissions with alternative method: $($_.Exception.Message)"
+        Write-Host "You may need to manually set permissions on $InstallPath" -ForegroundColor Red
+    }
 }
 
 # Step 4: Register the runner (if URL and token provided)
