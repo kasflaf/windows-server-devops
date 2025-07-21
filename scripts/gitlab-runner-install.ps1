@@ -1,10 +1,11 @@
 param(
     [string]$InstallPath = "C:\GitLab-Runner",
-    [string]$RunnerUrl = "",
-    [string]$RegistrationToken = "",
-    [string]$RunnerName = "windows-runner",
-    [string]$RunnerTags = "windows,powershell",
+    [string]$Url = "",  # Changed from RunnerUrl to match --url
+    [string]$Token = "",  # Changed from RegistrationToken to match --token
+    [string]$Description = "windows-runner",  # Changed from RunnerName to match --description
+    [string]$TagList = "windows,powershell",  # Changed from RunnerTags to match --tag-list
     [string]$Executor = "shell",
+    [string]$DockerImage = "",  # Add for docker executor
     [switch]$UseUserAccount,
     [string]$Username = "",
     [string]$Password = ""
@@ -59,42 +60,41 @@ if (Test-Path $RunnerExePath) {
     }
 }
 
-# Step 3: Set proper permissions on the directory and executable
-Write-Host "Setting permissions on GitLab Runner directory..." -ForegroundColor Yellow
+# Step 3: Set comprehensive permissions to prevent access denied errors
+Write-Host "Setting comprehensive permissions on GitLab Runner directory..." -ForegroundColor Yellow
 try {
-    # First, set basic permissions that allow service installation
-    $acl = Get-Acl $InstallPath
+    # Use icacls for more reliable permission setting
+    Write-Host "Setting directory permissions..." -ForegroundColor Gray
+    & icacls $InstallPath /grant "SYSTEM:(OI)(CI)F" /grant "Administrators:(OI)(CI)F" /grant "LOCAL SERVICE:(OI)(CI)F" /grant "NETWORK SERVICE:(OI)(CI)F" /grant "Everyone:(OI)(CI)M" /T /C /Q
     
-    # Don't remove inherited permissions initially - just add what we need
-    $systemRule = New-Object System.Security.AccessControl.FileSystemAccessRule("SYSTEM", "FullControl", "ContainerInherit,ObjectInherit", "None", "Allow")
-    $adminRule = New-Object System.Security.AccessControl.FileSystemAccessRule("Administrators", "FullControl", "ContainerInherit,ObjectInherit", "None", "Allow")
-    $localServiceRule = New-Object System.Security.AccessControl.FileSystemAccessRule("LOCAL SERVICE", "FullControl", "ContainerInherit,ObjectInherit", "None", "Allow")
-    $networkServiceRule = New-Object System.Security.AccessControl.FileSystemAccessRule("NETWORK SERVICE", "FullControl", "ContainerInherit,ObjectInherit", "None", "Allow")
+    Write-Host "Setting executable permissions..." -ForegroundColor Gray
+    & icacls $RunnerExePath /grant "SYSTEM:F" /grant "Administrators:F" /grant "LOCAL SERVICE:F" /grant "NETWORK SERVICE:F" /grant "Everyone:M" /C /Q
     
-    $acl.SetAccessRule($systemRule)
-    $acl.SetAccessRule($adminRule)
-    $acl.SetAccessRule($localServiceRule) 
-    $acl.SetAccessRule($networkServiceRule)
-    
-    # Apply permissions to directory
-    Set-Acl -Path $InstallPath -AclObject $acl
-    
-    # Apply same permissions to executable
-    Set-Acl -Path $RunnerExePath -AclObject $acl
-    
-    Write-Host "Basic permissions set successfully." -ForegroundColor Green
+    Write-Host "Permissions set successfully." -ForegroundColor Green
 } catch {
-    Write-Warning "Failed to set permissions: $($_.Exception.Message)"
-    Write-Host "Attempting alternative permission method..." -ForegroundColor Yellow
+    Write-Warning "Failed to set permissions using icacls: $($_.Exception.Message)"
     
-    # Alternative method using icacls
+    # Fallback to PowerShell ACL method
     try {
-        & icacls $InstallPath /grant "SYSTEM:(OI)(CI)F" /grant "Administrators:(OI)(CI)F" /grant "LOCAL SERVICE:(OI)(CI)F" /grant "NETWORK SERVICE:(OI)(CI)F" /T
-        & icacls $RunnerExePath /grant "SYSTEM:F" /grant "Administrators:F" /grant "LOCAL SERVICE:F" /grant "NETWORK SERVICE:F"
-        Write-Host "Alternative permissions set successfully." -ForegroundColor Green
+        Write-Host "Trying PowerShell ACL method..." -ForegroundColor Yellow
+        $acl = Get-Acl $InstallPath
+        
+        # Add broad permissions to ensure registration works
+        $systemRule = New-Object System.Security.AccessControl.FileSystemAccessRule("SYSTEM", "FullControl", "ContainerInherit,ObjectInherit", "None", "Allow")
+        $adminRule = New-Object System.Security.AccessControl.FileSystemAccessRule("Administrators", "FullControl", "ContainerInherit,ObjectInherit", "None", "Allow")
+        $everyoneRule = New-Object System.Security.AccessControl.FileSystemAccessRule("Everyone", "Modify", "ContainerInherit,ObjectInherit", "None", "Allow")
+        
+        $acl.SetAccessRule($systemRule)
+        $acl.SetAccessRule($adminRule)
+        $acl.SetAccessRule($everyoneRule)
+        
+        Set-Acl -Path $InstallPath -AclObject $acl
+        Set-Acl -Path $RunnerExePath -AclObject $acl
+        
+        Write-Host "Fallback permissions set successfully." -ForegroundColor Green
     } catch {
-        Write-Warning "Failed to set permissions with alternative method: $($_.Exception.Message)"
-        Write-Host "Continuing with installation..." -ForegroundColor Yellow
+        Write-Warning "Failed to set permissions: $($_.Exception.Message)"
+        Write-Host "Continuing with installation - you may need to set permissions manually." -ForegroundColor Yellow
     }
 }
 
@@ -105,25 +105,38 @@ $isRegistered = Test-Path $configPath
 if (-not $isRegistered) {
     Set-Location $InstallPath
     
-    if ($RunnerUrl -and $RegistrationToken) {
+    if ($Url -and $Token) {
         # Non-interactive mode - all parameters provided
         Write-Host "Registering GitLab Runner (non-interactive mode)..." -ForegroundColor Yellow
         
         $registerArgs = @(
             "register",
             "--non-interactive",
-            "--url", $RunnerUrl,
-            "--registration-token", $RegistrationToken,
-            "--name", $RunnerName,
-            "--tag-list", $RunnerTags,
+            "--url", $Url,
+            "--token", $Token,
+            "--description", $Description,
+            "--tag-list", $TagList,
             "--executor", $Executor
         )
         
+        # Add docker-specific parameters if using docker executor
+        if ($Executor -eq "docker" -or $Executor -eq "docker-windows") {
+            if ($DockerImage) {
+                $registerArgs += @("--docker-image", $DockerImage)
+            } else {
+                # Default Windows docker image
+                $registerArgs += @("--docker-image", "mcr.microsoft.com/windows/servercore:ltsc2019")
+            }
+        }
+        
         Write-Host "Registration parameters:" -ForegroundColor Cyan
-        Write-Host "  URL: $RunnerUrl" -ForegroundColor Gray
-        Write-Host "  Name: $RunnerName" -ForegroundColor Gray
-        Write-Host "  Tags: $RunnerTags" -ForegroundColor Gray
+        Write-Host "  URL: $Url" -ForegroundColor Gray
+        Write-Host "  Description: $Description" -ForegroundColor Gray
+        Write-Host "  Tags: $TagList" -ForegroundColor Gray
         Write-Host "  Executor: $Executor" -ForegroundColor Gray
+        if ($DockerImage) {
+            Write-Host "  Docker Image: $DockerImage" -ForegroundColor Gray
+        }
         
         try {
             $result = & .\gitlab-runner.exe $registerArgs 2>&1
@@ -146,12 +159,12 @@ if (-not $isRegistered) {
         Write-Host "GitLab Runner needs to be registered before installing the service." -ForegroundColor Yellow
         Write-Host ""
         
-        if (-not $RunnerUrl -and -not $RegistrationToken) {
+        if (-not $Url -and -not $Token) {
             Write-Host "No registration parameters provided. Starting interactive registration..." -ForegroundColor Cyan
         } else {
             Write-Host "Missing required parameters for non-interactive registration:" -ForegroundColor Red
-            if (-not $RunnerUrl) { Write-Host "  - RunnerUrl" -ForegroundColor Red }
-            if (-not $RegistrationToken) { Write-Host "  - RegistrationToken" -ForegroundColor Red }
+            if (-not $Url) { Write-Host "  - Url" -ForegroundColor Red }
+            if (-not $Token) { Write-Host "  - Token" -ForegroundColor Red }
             Write-Host ""
             Write-Host "Starting interactive registration instead..." -ForegroundColor Cyan
         }
@@ -189,7 +202,7 @@ if (-not $isRegistered) {
             Write-Host ""
             Write-Host "Registration cancelled. You can:" -ForegroundColor Yellow
             Write-Host "1. Run this script again with parameters:" -ForegroundColor Cyan
-            Write-Host "   .\gitlab-runner-install.ps1 -RunnerUrl 'https://gitlab.com/' -RegistrationToken 'glrt-your-token'" -ForegroundColor Cyan
+            Write-Host "   .\gitlab-runner-install.ps1 -Url 'https://gitlab.com/' -Token 'glrt-your-token'" -ForegroundColor Cyan
             Write-Host "2. Or register manually:" -ForegroundColor Cyan
             Write-Host "   cd $InstallPath" -ForegroundColor Cyan
             Write-Host "   .\gitlab-runner.exe register" -ForegroundColor Cyan
@@ -227,7 +240,7 @@ if ($isRegistered) {
             # Now that service is installed, add permissions for the gitlab-runner service account
             Write-Host "Setting permissions for GitLab Runner service account..." -ForegroundColor Yellow
             try {
-                & icacls $InstallPath /grant "NT SERVICE\gitlab-runner:(OI)(CI)F" /T
+                & icacls $InstallPath /grant "NT SERVICE\gitlab-runner:(OI)(CI)F" /T /C /Q
                 Write-Host "GitLab Runner service permissions set successfully." -ForegroundColor Green
             } catch {
                 Write-Warning "Failed to set GitLab Runner service permissions: $($_.Exception.Message)"
@@ -274,6 +287,10 @@ if ($isRegistered) {
     Write-Host "Configuration file location: $configPath" -ForegroundColor Cyan
     Write-Host "You can modify the 'concurrent' value in config.toml to allow multiple concurrent jobs." -ForegroundColor Cyan
     Write-Host "Logs are available in Windows Event Log." -ForegroundColor Cyan
+    Write-Host ""
+    Write-Host "Usage examples:" -ForegroundColor Yellow
+    Write-Host "  Non-interactive: .\gitlab-runner-install.ps1 -Url 'https://gitlab.com/' -Token 'glrt-your-token'" -ForegroundColor Cyan
+    Write-Host "  Docker executor: .\gitlab-runner-install.ps1 -Url 'https://gitlab.com/' -Token 'glrt-your-token' -Executor 'docker'" -ForegroundColor Cyan
     Write-Host ""
     Write-Host "To verify the installation, run:" -ForegroundColor Yellow
     Write-Host "Get-Service gitlab-runner" -ForegroundColor Yellow
