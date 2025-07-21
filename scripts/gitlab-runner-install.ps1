@@ -60,42 +60,93 @@ if (Test-Path $RunnerExePath) {
     }
 }
 
-# Step 3: Set comprehensive permissions to prevent access denied errors
-Write-Host "Setting comprehensive permissions on GitLab Runner directory..." -ForegroundColor Yellow
+# Step 3: Clean and set secure permissions for GitLab Runner
+Write-Host "Cleaning and setting secure permissions on GitLab Runner directory..." -ForegroundColor Yellow
+
+# First, let's clean up any existing problematic permissions
+Write-Host "Cleaning existing permissions..." -ForegroundColor Gray
 try {
-    # Use icacls for more reliable permission setting
+    # Reset permissions to defaults first, then set our own
+    & icacls $InstallPath /reset /T /C /Q
+    & icacls $RunnerExePath /reset /C /Q
+    Write-Host "Existing permissions cleaned." -ForegroundColor Green
+} catch {
+    Write-Warning "Failed to reset permissions: $($_.Exception.Message)"
+    Write-Host "Continuing with permission setting..." -ForegroundColor Yellow
+}
+
+try {
+    # Remove inherited permissions and set explicit ones
     Write-Host "Setting directory permissions..." -ForegroundColor Gray
-    & icacls $InstallPath /grant "SYSTEM:(OI)(CI)F" /grant "Administrators:(OI)(CI)F" /grant "LOCAL SERVICE:(OI)(CI)F" /grant "NETWORK SERVICE:(OI)(CI)F" /grant "Everyone:(OI)(CI)M" /T /C /Q
+    & icacls $InstallPath /inheritance:r /C /Q
     
+    # Grant full control to SYSTEM and Administrators only for the directory
+    & icacls $InstallPath /grant "SYSTEM:(OI)(CI)F" /grant "Administrators:(OI)(CI)F" /T /C /Q
+    
+    # For the executable, be more restrictive - no write for regular users
     Write-Host "Setting executable permissions..." -ForegroundColor Gray
-    & icacls $RunnerExePath /grant "SYSTEM:F" /grant "Administrators:F" /grant "LOCAL SERVICE:F" /grant "NETWORK SERVICE:F" /grant "Everyone:M" /C /Q
+    & icacls $RunnerExePath /inheritance:r /C /Q
+    & icacls $RunnerExePath /grant "SYSTEM:F" /grant "Administrators:F" /grant "Authenticated Users:RX" /C /Q
     
-    Write-Host "Permissions set successfully." -ForegroundColor Green
+    Write-Host "Secure permissions set successfully." -ForegroundColor Green
 } catch {
     Write-Warning "Failed to set permissions using icacls: $($_.Exception.Message)"
     
-    # Fallback to PowerShell ACL method
+    # Fallback to PowerShell ACL method with cleanup
     try {
-        Write-Host "Trying PowerShell ACL method..." -ForegroundColor Yellow
+        Write-Host "Trying PowerShell ACL method with cleanup..." -ForegroundColor Yellow
+        
+        # Clean and set directory permissions
         $acl = Get-Acl $InstallPath
         
-        # Add broad permissions to ensure registration works
+        # Remove all explicit access rules first
+        $acl.Access | ForEach-Object { $acl.RemoveAccessRule($_) }
+        
+        # Remove inheritance and don't copy existing rules
+        $acl.SetAccessRuleProtection($true, $false)
+        
+        # Add only the permissions we want
         $systemRule = New-Object System.Security.AccessControl.FileSystemAccessRule("SYSTEM", "FullControl", "ContainerInherit,ObjectInherit", "None", "Allow")
         $adminRule = New-Object System.Security.AccessControl.FileSystemAccessRule("Administrators", "FullControl", "ContainerInherit,ObjectInherit", "None", "Allow")
-        $everyoneRule = New-Object System.Security.AccessControl.FileSystemAccessRule("Everyone", "Modify", "ContainerInherit,ObjectInherit", "None", "Allow")
         
         $acl.SetAccessRule($systemRule)
         $acl.SetAccessRule($adminRule)
-        $acl.SetAccessRule($everyoneRule)
-        
         Set-Acl -Path $InstallPath -AclObject $acl
-        Set-Acl -Path $RunnerExePath -AclObject $acl
+        
+        # Clean and set executable permissions
+        $exeAcl = Get-Acl $RunnerExePath
+        
+        # Remove all explicit access rules first
+        $exeAcl.Access | ForEach-Object { $exeAcl.RemoveAccessRule($_) }
+        
+        # Remove inheritance
+        $exeAcl.SetAccessRuleProtection($true, $false)
+        
+        # Add only the permissions we want for the executable
+        $systemExeRule = New-Object System.Security.AccessControl.FileSystemAccessRule("SYSTEM", "FullControl", "None", "None", "Allow")
+        $adminExeRule = New-Object System.Security.AccessControl.FileSystemAccessRule("Administrators", "FullControl", "None", "None", "Allow")
+        $userExeRule = New-Object System.Security.AccessControl.FileSystemAccessRule("Authenticated Users", "ReadAndExecute", "None", "None", "Allow")
+        
+        $exeAcl.SetAccessRule($systemExeRule)
+        $exeAcl.SetAccessRule($adminExeRule)
+        $exeAcl.SetAccessRule($userExeRule)
+        Set-Acl -Path $RunnerExePath -AclObject $exeAcl
         
         Write-Host "Fallback permissions set successfully." -ForegroundColor Green
     } catch {
         Write-Warning "Failed to set permissions: $($_.Exception.Message)"
         Write-Host "Continuing with installation - you may need to set permissions manually." -ForegroundColor Yellow
     }
+}
+
+# Verify the permissions were set correctly
+Write-Host "Verifying permissions..." -ForegroundColor Gray
+try {
+    $dirPerms = & icacls $InstallPath
+    $exePerms = & icacls $RunnerExePath
+    Write-Host "Permission verification completed." -ForegroundColor Green
+} catch {
+    Write-Warning "Could not verify permissions, but continuing with installation."
 }
 
 # Step 4: Register the runner
