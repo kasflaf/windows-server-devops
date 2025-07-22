@@ -12,7 +12,7 @@ This PowerShell script automates the installation and configuration of GitLab Ru
 
 ## Quick Start
 
-pull the scripts first
+pull the script first
 
 ### Basic Installation (Interactive Mode)
 
