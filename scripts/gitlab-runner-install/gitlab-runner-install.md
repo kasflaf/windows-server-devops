@@ -185,7 +185,7 @@ cd C:\GitLab-Runner
 For issues with this script, check:
 - [GitLab Runner Documentation](https://docs.gitlab.com/runner/)
 - [Gitlab Runner Registration Guide](https://docs.gitlab.com/runner/register/)
-- [Windows Installation Guide](https://docs.gitlab.com/runner/install/windows.html)
+- [Gitlab Runner Windows Installation Guide](https://docs.gitlab.com/runner/install/windows.html)
 - Event Viewer logs
 - GitLab Runner logs via `.\gitlab-runner.exe run`
 
