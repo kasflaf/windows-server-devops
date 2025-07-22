@@ -99,8 +99,7 @@ cd C:\GitLab-Runner
     --docker-image "mcr.microsoft.com/windows/servercore:ltsc2019"
 
 # Set concurrent jobs to 2 (or above) IMPORTANT TO RUN CONCURRENTLY !!!
-
-#use scripts
+# use scripts
 $configPath = "C:\GitLab-Runner\config.toml"
 (Get-Content $configPath) -replace '^(concurrent\s*=\s*)\d+', '${1}2' | Set-Content $configPath
 # or edit manually using notepad
