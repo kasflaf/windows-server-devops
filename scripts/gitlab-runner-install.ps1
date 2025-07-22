@@ -314,6 +314,16 @@ if ($isRegistered) {
             exit 1
         }
         
+        # Set service startup type to Automatic
+        Write-Host "Setting service startup type to Automatic..." -ForegroundColor Yellow
+        try {
+            Set-Service -Name "gitlab-runner" -StartupType Automatic
+            Write-Host "Service startup type set to Automatic." -ForegroundColor Green
+        } catch {
+            Write-Warning "Failed to set service startup type: $($_.Exception.Message)"
+            Write-Host "You may need to set this manually using: Set-Service -Name 'gitlab-runner' -StartupType Automatic" -ForegroundColor Yellow
+        }
+        
     } catch {
         Write-Error "Failed to install or start service: $($_.Exception.Message)"
         exit 1
@@ -325,6 +335,7 @@ if ($isRegistered) {
         $service = Get-Service -Name "gitlab-runner" -ErrorAction Stop
         if ($service.Status -eq "Running") {
             Write-Host "GitLab Runner service is running successfully." -ForegroundColor Green
+            Write-Host "Service startup type: $($service.StartType)" -ForegroundColor Cyan
         } else {
             Write-Warning "GitLab Runner service is installed but not running. Status: $($service.Status)"
         }
@@ -338,6 +349,7 @@ if ($isRegistered) {
     Write-Host "Configuration file location: $configPath" -ForegroundColor Cyan
     Write-Host "You can modify the 'concurrent' value in config.toml to allow multiple concurrent jobs." -ForegroundColor Cyan
     Write-Host "Logs are available in Windows Event Log." -ForegroundColor Cyan
+    Write-Host "Service is configured to start automatically on system boot." -ForegroundColor Cyan
     Write-Host ""
     Write-Host "Usage examples:" -ForegroundColor Yellow
     Write-Host "  Non-interactive: .\gitlab-runner-install.ps1 -Url 'https://gitlab.com/' -Token 'glrt-your-token'" -ForegroundColor Cyan
